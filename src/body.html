@@ -1,0 +1,125 @@
+<header class="top"><div class="top-in">
+  <div class="brand"><b>Nexus<span>Factory</span></b><small>Satisfactory 1.x · datos del juego</small></div>
+  <nav class="tabs" role="tablist" aria-label="Secciones">
+    <button data-tab="plan" role="tab">Planificador</button>
+    <button data-tab="build" role="tab">Taller</button>
+    <button data-tab="recipes" role="tab">Recetas</button>
+    <button data-tab="alts" role="tab">Alternativas</button>
+    <button data-tab="calc" role="tab">Extracción y energía</button>
+  </nav>
+  <div class="top-tools"><button class="chipbtn" id="teamBtn">Equipo</button><button class="chipbtn" id="shareBtn">Compartir</button><button class="chipbtn" id="langBtn">Nombres: ES</button></div>
+</div></header>
+
+<main>
+<!-- ===== PLANIFICADOR ===== -->
+<section class="view" id="v-plan">
+  <div class="plan">
+    <aside class="side">
+      <div class="box"><div class="bd">
+        <div class="planbar"><select id="planSel" aria-label="Plan"></select></div>
+        <div class="row" style="gap:6px"><button class="btn sm" id="planNew">＋ Nuevo</button><button class="btn sm" id="planDup">Duplicar</button><button class="btn sm" id="planRen">Renombrar</button><button class="btn sm danger" id="planDel">Eliminar</button></div>
+        <div id="planMeta" class="row" style="gap:6px"></div>
+        <div class="row"><label class="lbl" for="owner">Responsable</label><select id="owner" class="grow"></select></div>
+      </div></div>
+
+      <div class="box"><header><h3>Producir</h3><span class="sp"></span><button class="btn sm pri" id="addTarget">＋ Objetivo</button></header>
+        <div class="bd" id="targets"></div></div>
+
+      <div class="box"><header><h3>Ya me llega</h3><span class="sp"></span><button class="btn sm" id="addSupply">＋ Entrada</button></header>
+        <div class="bd" id="supplies"></div></div>
+
+      <div class="box"><header><h3>Ajustes</h3></header><div class="bd">
+        <div class="form">
+          <label for="gClock">Reloj de máquinas</label><div class="ratebox"><input id="gClock" type="number" min="1" max="250" step="any"><span>%</span></div>
+          <label for="minerEx">Minero</label><select id="minerEx"><option value="MinerMk1">Minero Mk.1</option><option value="MinerMk2">Minero Mk.2</option><option value="MinerMk3">Minero Mk.3</option></select>
+          <label for="minerPur">Nodos</label><select id="minerPur"><option value="0.5">Impuros</option><option value="1">Normales</option><option value="2">Puros</option></select>
+          <label for="minerClk">Reloj de mineros</label><div class="ratebox"><input id="minerClk" type="number" min="1" max="250" step="any"><span>%</span></div>
+        </div>
+        <div class="row"><button class="btn sm" id="optBtn" title="Usa las alternativas desbloqueadas que gastan menos recursos escasos">Optimizar recetas</button><button class="btn sm ghost" id="resetBtn">Recetas estándar</button></div>
+        <p class="hint">Optimizar usa solo las alternativas que marcaron como desbloqueadas, y da más peso a los recursos escasos del mapa, como el cobre.</p>
+      </div></div>
+    </aside>
+
+    <section class="results">
+      <div id="warn" class="warnbar" hidden></div>
+      <div class="stats" id="stats"></div>
+      <div class="flows">
+        <div class="box"><header><h3>Entradas</h3><span class="sp hint">recursos del mapa e importados</span></header><div class="bd flowlist" id="inputsList"></div></div>
+        <div class="box"><header><h3>Salidas</h3><span class="sp hint">objetivos y sobrantes</span></header><div class="bd flowlist" id="surplusList"></div></div>
+      </div>
+      <div class="box">
+        <header><h3>Líneas de producción</h3><span class="sp"></span>
+          <div class="seg" id="viewSeg" role="group" aria-label="Vista"><button data-v="diagram">Diagrama</button><button data-v="table">Tabla</button><button data-v="team">Por persona</button></div></header>
+        <div id="pane-diagram">
+          <div class="diagram"><svg id="dsvg" role="img" aria-label="Diagrama de flujo de producción"></svg>
+            <div class="dctl"><button id="dIn" aria-label="Acercar">+</button><button id="dOut" aria-label="Alejar">−</button><button id="dFit" aria-label="Ajustar a la pantalla">⤢</button></div>
+            <div class="dlegend"><span><i style="background:var(--good)"></i>Extraer</span><span><i style="background:var(--warn)"></i>Importar</span><span><i style="background:var(--accent)"></i>Objetivo</span><span><i style="background:var(--liquid)"></i>Fluido</span></div>
+          </div>
+          <div class="detail" id="detail" hidden></div>
+        </div>
+        <div id="pane-table" hidden><div class="tablewrap" id="table"></div></div>
+        <div id="pane-team" hidden><div class="team" id="team"></div></div>
+      </div>
+    </section>
+  </div>
+</section>
+
+<!-- ===== TALLER ===== -->
+<section class="view" id="v-build" hidden>
+  <div class="box" style="margin-bottom:14px"><header style="flex-wrap:wrap"><h2>Taller</h2><span class="hint" id="bPlanName"></span><span class="sp"></span>
+    <label class="lbl" for="bBelt">Cinta nueva</label><select id="bBelt"><option value="1">Mk.1 · 60</option><option value="2">Mk.2 · 120</option><option value="3">Mk.3 · 270</option><option value="4">Mk.4 · 480</option><option value="5">Mk.5 · 780</option><option value="6">Mk.6 · 1200</option></select>
+    <button class="btn sm pri" id="bGen">Generar desde el plan</button><button class="btn sm" id="bFit">Ajustar vista</button><button class="btn sm danger" id="bClear">Vaciar</button></header></div>
+  <div class="stats" id="bstats" style="margin-bottom:14px"></div>
+  <div class="builder">
+    <aside class="box palette"><header><h3>Añadir</h3></header><div class="bd" id="palette"></div></aside>
+    <div class="box canvasbox"><div class="diagram bcanvas"><svg id="bsvg" role="application" aria-label="Lienzo del taller"></svg></div></div>
+    <aside class="box inspector"><header><h3>Ajustes</h3></header><div class="bd" id="binsp"></div></aside>
+  </div>
+  <div class="flows" style="margin-top:14px">
+    <div class="box"><header><h3>Producción final</h3><span class="sp hint">lo que llega a almacenes y triturador</span></header><div class="bd flowlist" id="bout"></div></div>
+    <div class="box"><header><h3>Consumo de entradas</h3></header><div class="bd flowlist" id="bin"></div></div>
+  </div>
+  <div class="box" style="margin-top:14px"><header><h3>Problemas</h3><span class="sp hint">toca uno para verlo en el lienzo</span></header><div class="bd" id="bissues"></div></div>
+</section>
+
+<!-- ===== RECETAS ===== -->
+<section class="view" id="v-recipes" hidden>
+  <div class="lib">
+    <aside class="box"><div class="bd"><input id="libq" type="text" placeholder="Buscar objeto…" aria-label="Buscar objeto"></div><div class="itemlist" id="libList"></div></aside>
+    <div id="libDetail"></div>
+  </div>
+</section>
+
+<!-- ===== ALTERNATIVAS ===== -->
+<section class="view" id="v-alts" hidden>
+  <div class="box"><header style="flex-wrap:wrap"><h2>Recetas alternativas</h2><span class="hint" id="altCount"></span><span class="sp"></span>
+    <button class="btn sm" id="altRecOn">Marcar las ★ del equipo</button><button class="btn sm" id="altAll">Marcar todas</button><button class="btn sm ghost" id="altNone">Ninguna</button></header>
+    <div class="bd"><div class="row"><input id="altq" type="text" class="grow" placeholder="Buscar por receta o producto…" aria-label="Buscar alternativa"><label class="toggle"><input type="checkbox" id="altRec"> Solo las recomendadas en la hoja</label></div>
+      <p class="hint">Marca las que ya sacaron de los discos duros. Solo las marcadas aparecen en el planificador y en el taller. ★ = recomendada en el Plan maestro del equipo, con el nombre de quién la usa.</p></div>
+    <div class="altgrid" id="altGrid"></div></div>
+</section>
+
+<!-- ===== CALCULADORAS ===== -->
+<section class="view" id="v-calc" hidden>
+  <div class="calcs">
+    <div class="box"><header><h2>Extracción</h2></header><div class="bd">
+      <div class="form">
+        <label for="cx-ex">Extractor</label><select id="cx-ex"><option value="MinerMk1">Minero Mk.1</option><option value="MinerMk2" selected>Minero Mk.2</option><option value="MinerMk3">Minero Mk.3</option><option value="WaterPump">Extractor de agua</option><option value="OilPump">Extractor de petróleo</option><option value="WellPressurizer">Pozo de recursos (1 satélite)</option></select>
+        <label for="cx-res">Recurso</label><select id="cx-res"></select>
+        <label for="cx-pur">Pureza</label><select id="cx-pur"><option value="0.5">Impuro</option><option value="1" selected>Normal</option><option value="2">Puro</option></select>
+        <label for="cx-clk">Reloj %</label><input id="cx-clk" type="number" min="1" max="250" step="any" value="100">
+        <label for="cx-need">Necesito /min</label><input id="cx-need" type="number" min="0" step="any" value="480">
+      </div><div id="cx-out" style="display:flex;flex-direction:column;gap:10px"></div></div></div>
+    <div class="box"><header><h2>Energía</h2></header><div class="bd">
+      <div class="form">
+        <label for="cg-gen">Generador</label><select id="cg-gen"><option value="GeneratorCoal">Generador de carbón</option><option value="GeneratorFuel">Generador de combustible</option><option value="GeneratorNuclear">Central nuclear</option><option value="GeneratorBiomass_Automated">Quemador de biomasa</option></select>
+        <label for="cg-fuel">Combustible</label><select id="cg-fuel"></select>
+        <label for="cg-mw">Quiero MW</label><input id="cg-mw" type="number" min="0" step="any" value="1500">
+        <label for="cg-clk">Reloj %</label><input id="cg-clk" type="number" min="1" max="250" step="any" value="100">
+      </div><div id="cg-out" style="display:flex;flex-direction:column;gap:10px"></div></div></div>
+    <div class="box"><header><h2>Cintas y tuberías</h2></header><div class="bd">
+      <div class="outgrid"><div><span class="lbl">Cinta Mk.1</span><b>60/min</b></div><div><span class="lbl">Cinta Mk.2</span><b>120/min</b></div><div><span class="lbl">Cinta Mk.3</span><b>270/min</b></div><div><span class="lbl">Cinta Mk.4</span><b>480/min</b></div><div><span class="lbl">Cinta Mk.5</span><b>780/min</b></div><div><span class="lbl">Cinta Mk.6</span><b>1200/min</b></div><div><span class="lbl">Tubería Mk.1</span><b>300 m³/min</b></div><div><span class="lbl">Tubería Mk.2</span><b>600 m³/min</b></div></div>
+      <p class="note">Overclock: el consumo sube con el reloj elevado a 1,32. Cada fragmento de energía permite +50% (máx. 250% con 3). Un somersloop duplica la salida en proporción a sus ranuras, pero el consumo sube al cuadrado.</p></div></div>
+  </div>
+</section>
+</main>
