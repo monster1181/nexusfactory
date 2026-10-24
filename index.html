@@ -341,7 +341,7 @@ table.steps{width:100%;border-collapse:collapse;min-width:980px}
 <section class="view" id="v-build" hidden>
   <div class="box" style="margin-bottom:14px"><header style="flex-wrap:wrap"><h2>Taller</h2><span class="hint" id="bPlanName"></span><span class="sp"></span>
     <label class="lbl" for="bBelt">Cinta nueva</label><select id="bBelt"><option value="1">Mk.1 · 60</option><option value="2">Mk.2 · 120</option><option value="3">Mk.3 · 270</option><option value="4">Mk.4 · 480</option><option value="5">Mk.5 · 780</option><option value="6">Mk.6 · 1200</option></select>
-    <button class="btn sm pri" id="bGen">Generar desde el plan</button><button class="btn sm" id="bFit">Ajustar vista</button><button class="btn sm danger" id="bClear">Vaciar</button></header></div>
+    <label class="toggle"><input type="checkbox" id="bGroup"> Agrupar máquinas iguales</label><button class="btn sm pri" id="bGen">Generar desde el plan</button><button class="btn sm" id="bFit">Ajustar vista</button><button class="btn sm danger" id="bClear">Vaciar</button></header></div>
   <div class="stats" id="bstats" style="margin-bottom:14px"></div>
   <div class="builder">
     <aside class="box palette"><header><h3>Añadir</h3></header><div class="bd" id="palette"></div></aside>
@@ -660,24 +660,22 @@ function waterFill(total, caps) {
 }
 /* Propaga qué objeto lleva cada cinta (para divisores/fusionadores) */
 function edgeItems(build) {
-  const nodes = Object.fromEntries(build.nodes.map(n => [n.id, n]));
-  const item = {};
-  const portItem = (n, side, k) => { const p = nodePorts(n)[side][k]; return p ? p.item : null; };
-  for (let pass = 0; pass < 30; pass++) {
-    let ch = false;
-    for (const e of build.edges) {
-      if (item[e.id]) continue;
-      const a = nodes[e.from], b = nodes[e.to]; if (!a || !b) continue;
-      let it = portItem(a, 'outs', e.fp) || portItem(b, 'ins', e.tp);
-      if (!it && (a.kind === 'splitter' || a.kind === 'merger')) {
-        const inc = build.edges.find(x => x.to === a.id && item[x.id]); if (inc) it = item[inc.id];
-      }
-      if (!it && (b.kind === 'splitter' || b.kind === 'merger')) {
-        const og = build.edges.find(x => x.from === b.id && item[x.id]); if (og) it = item[og.id];
-      }
-      if (it) { item[e.id] = it; ch = true; }
+  const nodes = {}; build.nodes.forEach(n => nodes[n.id] = n);
+  const item = {}, inE = {}, outE = {};
+  for (const e of build.edges) { (outE[e.from] ??= []).push(e); (inE[e.to] ??= []).push(e); }
+  const isLog = n => n && (n.kind === 'splitter' || n.kind === 'merger');
+  const q = [];
+  for (const e of build.edges) {
+    const a = nodes[e.from], b = nodes[e.to]; if (!a || !b) continue;
+    const it = nodePorts(a).outs[e.fp]?.item || nodePorts(b).ins[e.tp]?.item;
+    if (it) { item[e.id] = it; q.push(e); }
+  }
+  while (q.length) { // propagar a través de divisores y fusionadores
+    const e = q.pop(), it = item[e.id];
+    for (const nid of [e.from, e.to]) {
+      if (!isLog(nodes[nid])) continue;
+      for (const x of [...(inE[nid] || []), ...(outE[nid] || [])]) if (!item[x.id]) { item[x.id] = it; q.push(x); }
     }
-    if (!ch) break;
   }
   return item;
 }
@@ -699,8 +697,9 @@ function simulate(build) {
   const st = {};
   const portEdges = (list, key, k) => list.filter(e => e[key] === k);
   const order = topoOrder(nodes, edges);
-  for (let it = 0; it < 120; it++) {
-    let delta = 0;
+  let iters = 0, lastDelta = 0;
+  for (let it = 0; it < 600; it++) {
+    let delta = 0; iters = it;
     // pase hacia adelante
     for (const n of order) {
       const outs = outE[n.id], ins = inE[n.id];
@@ -741,12 +740,10 @@ function simulate(build) {
     for (let k2 = order.length - 1; k2 >= 0; k2--) {
       const n = order[k2]; const ins = inE[n.id], outs = outE[n.id];
       const setDemand = (list, total) => {
-        const caps = list.map(e => cap[e.id]);
-        // repartir según lo ofrecido primero, luego lo que sobre
-        const a = waterFill(total, list.map(e => Math.min(cap[e.id], Math.max(offer[e.id], 1e-9))));
-        let left = total - a.reduce((s, v) => s + v, 0);
-        const extra = waterFill(left, caps.map((c, k) => c - a[k]));
-        list.forEach((e, k) => { const v = a[k] + extra[k]; delta = Math.max(delta, Math.abs(demand[e.id] - v)); demand[e.id] = v; });
+        // primero lo que ya ofrece cada entrada; lo que sobra lo puede aportar cualquiera
+        const a = waterFill(total, list.map(e => Math.min(cap[e.id], offer[e.id])));
+        const left = total - a.reduce((s, v) => s + v, 0);
+        list.forEach((e, k) => { const v = Math.min(cap[e.id], a[k] + left); delta = Math.max(delta, Math.abs(demand[e.id] - v)); demand[e.id] = v; });
       };
       if (n.kind === 'storage' || n.kind === 'sink') ins.forEach(e => { delta = Math.max(delta, Math.abs(demand[e.id] - cap[e.id])); demand[e.id] = cap[e.id]; });
       else if (n.kind === 'splitter' || n.kind === 'merger') setDemand(ins, outs.reduce((s, e) => s + Math.min(cap[e.id], demand[e.id]), 0));
@@ -761,6 +758,7 @@ function simulate(build) {
         r.in.forEach(([i, a], k) => setDemand(portEdges(ins, 'tp', k), Math.max(0, mx) * a));
       }
     }
+    lastDelta = delta;
     if (delta < 1e-9) break;
   }
   // resultados
@@ -799,7 +797,7 @@ function simulate(build) {
       if (starved || blocked) issues.push({ edge: e.id, t: 'belt' });
     }
   }
-  return { st, flow, cap, eItem, received, consumedSrc, power, powerMax, machines, points, issues };
+  return { st, flow, cap, eItem, received, consumedSrc, power, powerMax, machines, points, issues, iters, lastDelta };
 }
 function topoOrder(nodes, edges) {
   const indeg = {}; const adj = {};
@@ -1144,11 +1142,13 @@ function layoutGraph(N, E, opt = {}) {
   }
   let maxH = 0;
   cols.forEach(c => { if (c) maxH = Math.max(maxH, c.reduce((a, n) => a + H(n) + GY, 0)); });
+  const colX = []; let acc = 0;
+  cols.forEach((c, k) => { colX[k] = acc; acc += (c ? Math.max(...c.map(n => n.w || W)) : W) + GX; });
   cols.forEach((c, k) => {
     if (!c) return; const tot = c.reduce((a, n) => a + H(n) + GY, 0) - GY; let y = (maxH - tot) / 2;
-    c.forEach(n => { n.x = k * (W + GX); n.y = y; n.w = W; n.h = H(n); y += n.h + GY; });
+    c.forEach(n => { n.x = colX[k]; n.y = y; n.w = n.w || W; n.h = H(n); y += n.h + GY; });
   });
-  return { W: (cols.length) * (W + GX), H: maxH, back };
+  return { W: acc, H: maxH, back };
 }
 function renderDiagram() {
   const svg = $('#dsvg');
@@ -1266,7 +1266,13 @@ const PALETTE = [
   ['Logística', [['splitter', 'Divisor'], ['merger', 'Fusionador'], ['storage', 'Almacén'], ['sink', 'Triturador AWESOME']]]
 ];
 const NW = 214;
-function bNodeSize(n) { const p = nodePorts(n); const k = Math.max(p.ins.length, p.outs.length, 1); return { w: NW, h: 62 + k * 22 }; }
+const LOGW = 96;
+function bGeom(n) {
+  const p = nodePorts(n); const k = Math.max(p.ins.length, p.outs.length, 1);
+  if (n.kind === 'splitter' || n.kind === 'merger') return { w: LOGW, h: 30 + k * 16, top: 28, step: 16 };
+  return { w: NW, h: 62 + k * 22, top: 58, step: 22 };
+}
+function bNodeSize(n) { const g = bGeom(n); return { w: g.w, h: g.h }; }
 function bTitle(n) {
   if (n.kind === 'machine') return REC[n.recipe] ? nameOf(REC[n.recipe].out[0][0]) : machName(n.m);
   if (n.kind === 'extractor') return `${machName(n.ex)}`;
@@ -1291,7 +1297,7 @@ function addBNode(spec, at) {
   b.nodes.push(n); BSEL = { node: n.id }; save(); renderBuild();
   if (kind === 'source') pickItem(i => { n.item = i; save(); renderBuild(); }, { title: '¿Qué entra por aquí?' });
 }
-function portPos(n, side, k) { const s = bNodeSize(n); return { x: n.x + (side === 'in' ? 0 : s.w), y: n.y + 58 + k * 22 + 4 }; }
+function portPos(n, side, k) { const g = bGeom(n); return { x: n.x + (side === 'in' ? 0 : g.w), y: n.y + g.top + k * g.step + 4 }; }
 function renderBuild() {
   const p = plan(); const b = p.build;
   $('#bPlanName').textContent = p.name;
@@ -1304,54 +1310,76 @@ function renderBuild() {
   drawBuild();
   renderBInspector(); renderBSummary();
 }
+function edgeSvg(e, a, c, sim) {
+  const p1 = portPos(a, 'out', e.fp), p2 = portPos(c, 'in', e.tp);
+  const dx = Math.max(40, Math.abs(p2.x - p1.x) / 2);
+  const it = sim.eItem[e.id], f = sim.flow[e.id] || 0, cp = sim.cap[e.id] || 0;
+  const sat = cp && f >= cp - 1e-6, idle = f < 1e-6;
+  const color = !it ? 'var(--bad)' : sat ? 'var(--bad)' : isLiq(it) ? 'var(--liquid)' : 'var(--muted)';
+  const d = `M${p1.x},${p1.y} C${p1.x + dx},${p1.y} ${p2.x - dx},${p2.y} ${p2.x},${p2.y}`;
+  const tier = it ? (isLiq(it) ? `Tub. Mk.${Math.min(e.tier || 2, 2)}` : `Mk.${Math.min(e.tier || 3, 6)}`) + (e.lanes > 1 ? ` ×${e.lanes}` : '') : '¿?';
+  const lbl = `${fmt(f, 1)}/${fmt(cp, 0)} · ${tier}`;
+  const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2; const lw = lbl.length * 6.3 + 10;
+  const sel = BSEL?.edge === e.id;
+  const short = Math.hypot(p2.x - p1.x, p2.y - p1.y) < lw + 30 && !sel;
+  return `<g class="bedge" data-edge="${e.id}"><path d="${d}" fill="none" stroke="transparent" stroke-width="14"/><path d="${d}" fill="none" stroke="${sel ? 'var(--accent)' : color}" stroke-width="${sel ? 4 : 2.6}" ${idle ? 'stroke-dasharray="6 5"' : ''} stroke-opacity="${idle ? .6 : .9}"/>
+      ${short ? '' : `<rect x="${mx - lw / 2}" y="${my - 9}" width="${lw}" height="17" rx="3" fill="var(--panel)" stroke="${sat ? 'var(--bad)' : 'var(--line)'}"/><text x="${mx}" y="${my + 4}" text-anchor="middle" style="font:600 10.5px var(--f-mono);fill:${sat ? 'var(--bad)' : 'var(--ink)'}">${esc(lbl)}</text>`}</g>`;
+}
 function drawBuild() {
   const p = plan(), b = p.build, sim = BSIM;
   const by = Object.fromEntries(b.nodes.map(n => [n.id, n]));
   let eh = '', nh = '';
-  for (const e of b.edges) {
-    const a = by[e.from], c = by[e.to]; if (!a || !c) continue;
-    const p1 = portPos(a, 'out', e.fp), p2 = portPos(c, 'in', e.tp);
-    const dx = Math.max(50, Math.abs(p2.x - p1.x) / 2);
-    const it = sim.eItem[e.id], f = sim.flow[e.id] || 0, cp = sim.cap[e.id] || 0;
-    const sat = cp && f >= cp - 1e-6, idle = f < 1e-6;
-    const color = !it ? 'var(--bad)' : sat ? 'var(--bad)' : isLiq(it) ? 'var(--liquid)' : 'var(--muted)';
-    const d = `M${p1.x},${p1.y} C${p1.x + dx},${p1.y} ${p2.x - dx},${p2.y} ${p2.x},${p2.y}`;
-    const tier = it ? (isLiq(it) ? `Tub. Mk.${Math.min(e.tier || 2, 2)}` : `Mk.${Math.min(e.tier || 3, 6)}`) + (e.lanes > 1 ? ` ×${e.lanes}` : '') : '¿?';
-    const lbl = `${fmt(f, 1)}/${fmt(cp, 0)} · ${tier}`;
-    const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2; const lw = lbl.length * 6.3 + 10;
-    const sel = BSEL?.edge === e.id;
-    eh += `<g class="bedge" data-edge="${e.id}"><path d="${d}" fill="none" stroke="transparent" stroke-width="14"/><path d="${d}" fill="none" stroke="${sel ? 'var(--accent)' : color}" stroke-width="${sel ? 4 : 2.6}" ${idle ? 'stroke-dasharray="6 5"' : ''} stroke-opacity="${idle ? .6 : .9}"/>
-      <rect x="${mx - lw / 2}" y="${my - 9}" width="${lw}" height="17" rx="3" fill="var(--panel)" stroke="${sat ? 'var(--bad)' : 'var(--line)'}"/><text x="${mx}" y="${my + 4}" text-anchor="middle" style="font:600 10.5px var(--f-mono);fill:${sat ? 'var(--bad)' : 'var(--ink)'}">${esc(lbl)}</text></g>`;
-  }
+  for (const e of b.edges) { const a = by[e.from], c = by[e.to]; if (a && c) eh += edgeSvg(e, a, c, sim); }
   for (const n of b.nodes) {
-    const s = bNodeSize(n), st = sim.st[n.id] || {}, ports = nodePorts(n);
+    const g = bGeom(n), st = sim.st[n.id] || {}, ports = nodePorts(n);
+    const isSM = n.kind === 'splitter' || n.kind === 'merger';
+    const sel = BSEL?.node === n.id;
+    if (isSM) {
+      const it = sim.eItem[(b.edges.find(e => e.to === n.id || e.from === n.id) || {}).id];
+      let h = `<g class="bnode" data-node="${n.id}" transform="translate(${n.x},${n.y})"><rect width="${g.w}" height="${g.h}" rx="5" fill="var(--panel2)" stroke="${sel ? 'var(--accent)' : 'var(--line)'}" stroke-width="${sel ? 2.4 : 1.2}"/>
+        <text x="${g.w / 2}" y="17" text-anchor="middle" style="font:700 11px var(--f-mono);letter-spacing:.06em;fill:var(--muted)">${n.kind === 'splitter' ? 'DIVISOR' : 'FUSIONADOR'}</text>
+        <text x="${g.w / 2}" y="${g.h - 8}" text-anchor="middle" style="font:600 10.5px var(--f-mono);fill:var(--ink)">${fmt(st.rate || 0, 1)}</text>`;
+      ports.ins.forEach(pt => { const yy = g.top + pt.k * g.step + 4; h += `<g class="port" data-port="in" data-k="${pt.k}"><rect x="-5" y="${yy - 5}" width="10" height="10" rx="2" fill="var(--panel)" stroke="${it && isLiq(it) ? 'var(--liquid)' : 'var(--ink)'}" stroke-width="1.4"/></g>`; });
+      ports.outs.forEach(pt => { const yy = g.top + pt.k * g.step + 4; h += `<g class="port" data-port="out" data-k="${pt.k}"><rect x="${g.w - 6}" y="${yy - 6}" width="12" height="12" rx="2" fill="var(--accent)" style="cursor:crosshair"/></g>`; });
+      nh += h + '</g>'; continue;
+    }
     const eff = st.max ? st.rate / st.max : (n.kind === 'storage' || n.kind === 'sink' ? 1 : 0);
-    const col = !st.max && n.kind !== 'storage' && n.kind !== 'sink' && n.kind !== 'splitter' && n.kind !== 'merger' ? 'var(--muted)' : eff >= 0.995 ? 'var(--good)' : eff > 0.01 ? 'var(--warn)' : 'var(--bad)';
-    const isLog = ['splitter', 'merger', 'storage', 'sink'].includes(n.kind);
+    const col = !st.max && n.kind !== 'storage' && n.kind !== 'sink' ? 'var(--muted)' : eff >= 0.995 ? 'var(--good)' : eff > 0.01 ? 'var(--warn)' : 'var(--bad)';
+    const isLog = n.kind === 'storage' || n.kind === 'sink';
     const mainItem = n.kind === 'machine' ? REC[n.recipe]?.out[0][0] : n.item;
     let h = `<g class="bnode" data-node="${n.id}" transform="translate(${n.x},${n.y})">
-      <rect width="${s.w}" height="${s.h}" rx="6" fill="var(--panel)" stroke="${BSEL?.node === n.id ? 'var(--accent)' : 'var(--line)'}" stroke-width="${BSEL?.node === n.id ? 2.4 : 1.2}"/>
-      <rect width="${s.w}" height="5" rx="2" fill="${isLog ? 'var(--muted)' : col}"/>
+      <rect width="${g.w}" height="${g.h}" rx="6" fill="var(--panel)" stroke="${sel ? 'var(--accent)' : 'var(--line)'}" stroke-width="${sel ? 2.4 : 1.2}"/>
+      <rect width="${g.w}" height="5" rx="2" fill="${isLog ? 'var(--muted)' : col}"/>
       ${mainItem ? `<foreignObject x="10" y="13" width="26" height="26"><div xmlns="http://www.w3.org/1999/xhtml">${icon(mainItem)}</div></foreignObject>` : ''}
       <text x="${mainItem ? 42 : 12}" y="28" style="font:700 13px var(--f-body);fill:var(--ink)">${esc(trunc(bTitle(n), 22))}</text>
       <text x="${mainItem ? 42 : 12}" y="44" style="font:11px var(--f-body);fill:var(--muted)">${esc(trunc(bSub(n), 30))}</text>`;
-    if (!isLog && st.max !== undefined) h += `<text x="${s.w - 10}" y="28" text-anchor="end" style="font:700 12px var(--f-mono);fill:${col}">${fmt(eff * 100, 0)}%</text>`;
-    if (n.kind === 'storage' || n.kind === 'sink') h += `<text x="${s.w - 10}" y="28" text-anchor="end" style="font:700 12px var(--f-mono);fill:var(--ink)">${fmt(st.rate || 0, 1)}/min</text>`;
+    if (!isLog && st.max !== undefined) h += `<text x="${g.w - 10}" y="28" text-anchor="end" style="font:700 12px var(--f-mono);fill:${col}">${fmt(eff * 100, 0)}%</text>`;
+    if (isLog) h += `<text x="${g.w - 10}" y="28" text-anchor="end" style="font:700 12px var(--f-mono);fill:var(--ink)">${fmt(st.rate || 0, 1)}/min</text>`;
     ports.ins.forEach(pt => {
-      const yy = 58 + pt.k * 22 + 4; const it = pt.item; const lq = it && isLiq(it);
+      const yy = g.top + pt.k * g.step + 4; const it = pt.item; const lq = it && isLiq(it);
       h += `<g class="port" data-port="in" data-k="${pt.k}"><${lq ? 'circle cx="0" cy="' + yy + '" r="6"' : 'rect x="-6" y="' + (yy - 6) + '" width="12" height="12" rx="2"'} fill="var(--panel2)" stroke="${lq ? 'var(--liquid)' : 'var(--ink)'}" stroke-width="1.5"/>
         <text x="12" y="${yy + 4}" style="font:11px var(--f-body);fill:var(--muted)">${esc(it ? trunc(nameOf(it), 16) : 'entrada ' + (pt.k + 1))}</text></g>`;
     });
     ports.outs.forEach(pt => {
-      const yy = 58 + pt.k * 22 + 4; const it = pt.item; const lq = it && isLiq(it);
-      h += `<g class="port" data-port="out" data-k="${pt.k}"><text x="${s.w - 12}" y="${yy + 4}" text-anchor="end" style="font:11px var(--f-body);fill:var(--muted)">${esc(it ? trunc(nameOf(it), 16) : 'salida ' + (pt.k + 1))}</text>
-        <${lq ? 'circle cx="' + s.w + '" cy="' + yy + '" r="7"' : 'rect x="' + (s.w - 7) + '" y="' + (yy - 7) + '" width="14" height="14" rx="2"'} fill="var(--accent)" stroke="var(--accent)" style="cursor:crosshair"/></g>`;
+      const yy = g.top + pt.k * g.step + 4; const it = pt.item; const lq = it && isLiq(it);
+      h += `<g class="port" data-port="out" data-k="${pt.k}"><text x="${g.w - 12}" y="${yy + 4}" text-anchor="end" style="font:11px var(--f-body);fill:var(--muted)">${esc(it ? trunc(nameOf(it), 16) : 'salida ' + (pt.k + 1))}</text>
+        <${lq ? 'circle cx="' + g.w + '" cy="' + yy + '" r="7"' : 'rect x="' + (g.w - 7) + '" y="' + (yy - 7) + '" width="14" height="14" rx="2"'} fill="var(--accent)" stroke="var(--accent)" style="cursor:crosshair"/></g>`;
     });
     nh += h + '</g>';
   }
   const empty = !b.nodes.length ? `<text x="0" y="0" style="font:14px var(--f-body);fill:var(--muted)"><tspan x="20" dy="20">Taller vacío. Añade máquinas desde la izquierda,</tspan><tspan x="20" dy="20">o pulsa «Generar desde el plan» para armarlo solo.</tspan></text>` : '';
-  $('#bsvg').innerHTML = `<g id="bview">${empty}${eh}${nh}<path id="bconn" d="" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="6 4"/></g>`;
+  $('#bsvg').innerHTML = `<g id="bview">${empty}<g id="bedges">${eh}</g>${nh}<path id="bconn" d="" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="6 4"/></g>`;
   applyBV();
+}
+function moveNodeFast(n) { // al arrastrar: mover solo el nodo y sus cintas
+  const g = $(`#bsvg .bnode[data-node="${n.id}"]`); if (g) g.setAttribute('transform', `translate(${n.x},${n.y})`);
+  const b = plan().build; const by = {}; b.nodes.forEach(x => by[x.id] = x);
+  for (const e of b.edges) {
+    if (e.from !== n.id && e.to !== n.id) continue;
+    const old = $(`#bsvg .bedge[data-edge="${e.id}"]`); if (!old || !by[e.from] || !by[e.to]) continue;
+    const tmp = document.createElementNS('http://www.w3.org/2000/svg', 'g'); tmp.innerHTML = edgeSvg(e, by[e.from], by[e.to], BSIM);
+    old.replaceWith(tmp.firstElementChild);
+  }
 }
 const trunc = (s, n) => (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
 function applyBV() { const g = $('#bview'); if (g) g.setAttribute('transform', `translate(${BV.x},${BV.y}) scale(${BV.k})`); }
@@ -1404,7 +1432,7 @@ function bindBuild() {
       const p1 = portPos(BCONN.n, 'out', BCONN.k), w = toWorld(e); const dx = Math.max(40, Math.abs(w.x - p1.x) / 2);
       $('#bconn')?.setAttribute('d', `M${p1.x},${p1.y} C${p1.x + dx},${p1.y} ${w.x - dx},${w.y} ${w.x},${w.y}`); return;
     }
-    if (drag) { const w = toWorld(e); drag.n.x = Math.round((w.x - drag.ox) / 10) * 10; drag.n.y = Math.round((w.y - drag.oy) / 10) * 10; drag.moved = true; drawBuild(); }
+    if (drag) { const w = toWorld(e); drag.n.x = Math.round((w.x - drag.ox) / 10) * 10; drag.n.y = Math.round((w.y - drag.oy) / 10) * 10; drag.moved = true; moveNodeFast(drag.n); }
   });
   svg.addEventListener('pointerup', e => {
     if (BCONN) {
@@ -1495,7 +1523,7 @@ function renderBInspector() {
     h += `<div class="io">${inc.map(e => items[e.id] ? `<span>${icon(items[e.id])}<span class="q">${fmt(BSIM.flow[e.id] || 0)}</span>${esc(nameOf(items[e.id]))}</span>` : '').join('') || '<span class="hint">Nada conectado todavía.</span>'}</div>`;
     if (n.kind === 'splitter') h += `<p class="hint">Reparte en partes iguales entre sus salidas; si una se llena, lo sobrante va a las demás.</p>`;
   }
-  h += `<div class="row"><button class="btn sm" data-bdup>Duplicar</button><button class="btn danger sm" data-bdel>Eliminar</button></div>`;
+  h += `<div class="row">${(n.kind === 'machine' || n.kind === 'extractor') && (+n.count || 1) > 1 ? `<button class="btn sm pri" data-bsplit>Separar en ${n.count} máquinas</button>` : ''}<button class="btn sm" data-bdup>Duplicar</button><button class="btn danger sm" data-bdel>Eliminar</button></div>`;
   box.innerHTML = h;
 }
 function reasonText(r) {
@@ -1525,19 +1553,55 @@ function renderBSummary() {
   $('#bin').innerHTML = src.map(([i, v]) => li(i, v)).join('') || `<p class="empty-note">Sin extractores ni entradas.</p>`;
   $('#bissues').innerHTML = issues.join('') || `<p class="empty-note">Sin problemas: todas las máquinas van al 100%.</p>`;
 }
+/* Separa un bloque de N máquinas iguales en N máquinas con divisores y fusionadores */
+function groupDims(n) {
+  const c = Math.round(+n.count || 1), P = nodePorts(n), g = bGeom(n);
+  const rowH = g.h + 16;
+  const leftW = P.ins.length ? P.ins.length * 120 + 40 : 0, rightW = P.outs.length ? P.outs.length * 120 + 40 : 0;
+  return { c, P, g, rowH, leftW, rightW, height: c > 1 ? c * rowH - 16 : g.h, width: (c > 1 ? leftW + rightW : 0) + g.w };
+}
+function expandGroup(b, n) {
+  const { c, P, g, rowH } = groupDims(n); if (c <= 1) return null;
+  const r = n.kind === 'machine' ? REC[n.recipe] : null;
+  const am = r && MACH[r.m].s ? 1 + Math.min(+n.sloop || 0, MACH[r.m].s) / MACH[r.m].s : 1;
+  const per = (side, k) => n.kind === 'extractor' ? extractorRate(Object.assign({}, n, { count: 1 })) : perMin(r, (side === 'in' ? r.in : r.out)[k][1]) * (+n.clock || 100) / 100 * (side === 'out' ? am : 1);
+  const tf = (item, rate) => { const bt = beltFor(rate, isLiq(item)); return { tier: bt.tier, lanes: bt.n }; };
+  const copies = Array.from({ length: c }, (_, i) => Object.assign({}, n, { id: uid(), count: 1, y: n.y + i * rowH }));
+  const nn = [...copies], ne = [];
+  const E = (from, fp, to, tp, item, rate) => ne.push(Object.assign({ id: uid(), from, fp, to, tp }, tf(item, rate)));
+  P.ins.forEach((pt, k) => {
+    const item = pt.item, pm = per('in', k);
+    const sx = n.x - 40 - LOGW - (P.ins.length - 1 - k) * 120;
+    const spl = Array.from({ length: c - 1 }, (_, i) => ({ id: uid(), kind: 'splitter', x: sx, y: copies[i].y + Math.max(0, (g.h - 78) / 2) }));
+    spl.forEach((s, i) => {
+      E(s.id, 0, copies[i].id, k, item, pm);
+      if (i < c - 2) E(s.id, 1, spl[i + 1].id, 0, item, pm * (c - 1 - i)); else E(s.id, 1, copies[c - 1].id, k, item, pm);
+    });
+    b.edges.forEach(e => { if (e.to === n.id && e.tp === k) { e.to = spl[0].id; e.tp = 0; } });
+    nn.push(...spl);
+  });
+  P.outs.forEach((pt, k) => {
+    const item = pt.item, pm = per('out', k);
+    const mx = n.x + g.w + 40 + k * 120;
+    const mer = Array.from({ length: c - 1 }, (_, i) => ({ id: uid(), kind: 'merger', x: mx, y: copies[i + 1].y + Math.max(0, (g.h - 78) / 2) }));
+    E(copies[0].id, k, mer[0].id, 1, item, pm);
+    for (let i = 1; i < c; i++) { E(copies[i].id, k, mer[i - 1].id, 0, item, pm); if (i < c - 1) E(mer[i - 1].id, 0, mer[i].id, 1, item, pm * (i + 1)); }
+    b.edges.forEach(e => { if (e.from === n.id && e.fp === k) { e.from = mer[c - 2].id; e.fp = 0; } });
+    nn.push(...mer);
+  });
+  b.nodes = b.nodes.filter(x => x.id !== n.id).concat(nn); b.edges.push(...ne);
+  return { copies, height: c * rowH - 16 };
+}
 /* Genera la construcción a partir del plan resuelto */
 function generateBuild() {
   const p = plan(); const sol = solvePlan(p, UNLOCK);
   if (!sol.rows.length) { toast('El plan no tiene máquinas todavía.'); return; }
+  const grouped = !!S.groupBuild;
   const { N, E } = buildGraph(sol);
-  N.forEach(n => {
-    if (n.type === 'recipe') { const t = { kind: 'machine', recipe: n.row.id }; n.h = bNodeSize(t).h; }
-    else n.h = bNodeSize({ kind: n.type === 'raw' ? 'extractor' : n.type === 'out' || n.type === 'ex' ? 'storage' : 'source' }).h;
-  });
-  layoutGraph(N, E, { W: NW, GX: 170, GY: 34 });
+  // nodos del taller (agrupados) para medir
   const nodes = [], edges = [], map = {};
   N.forEach(n => {
-    const base = { id: uid(), x: Math.round(n.x / 10) * 10, y: Math.round(n.y / 10) * 10, clock: 100, count: 1 };
+    const base = { id: uid(), x: 0, y: 0, clock: 100, count: 1 };
     let nd;
     if (n.type === 'recipe') { const rw = n.row; nd = Object.assign(base, { kind: 'machine', m: rw.r.m, recipe: rw.id, count: Math.max(1, rw.built), clock: +rw.balanced.toFixed(4), sloop: +(p.sloop?.[rw.id] || 0) }); }
     else if (n.type === 'raw' && (SOLID_RES.includes(n.item) || n.item === 'Water' || n.item === 'LiquidOil')) {
@@ -1549,18 +1613,34 @@ function generateBuild() {
     else if (n.type === 'out') nd = Object.assign(base, { kind: 'storage', label: 'Objetivo: ' + nameOf(n.item) });
     else nd = Object.assign(base, { kind: isLiq(n.item) ? 'storage' : 'sink', label: 'Sobrante' });
     map[n.id] = nd; nodes.push(nd);
+    const d = grouped ? { width: bGeom(nd).w, height: bGeom(nd).h, leftW: 0 } : groupDims(nd);
+    n.w = d.width; n.h = d.height; n._left = (!grouped && d.c > 1) ? d.leftW : 0;
   });
+  layoutGraph(N, E, { W: NW, GX: 150, GY: 40 });
+  N.forEach(n => { const nd = map[n.id]; nd.x = Math.round((n.x + n._left) / 10) * 10; nd.y = Math.round(n.y / 10) * 10; });
   E.forEach(e => {
     const a = map[e.from], c = map[e.to]; if (!a || !c) return;
     const fp = a.kind === 'machine' ? REC[a.recipe].out.findIndex(o => o[0] === e.item) : 0;
     let tp = 0;
     if (c.kind === 'machine') tp = REC[c.recipe].in.findIndex(o => o[0] === e.item);
-    else if (c.kind === 'storage') { tp = edges.filter(x => x.to === c.id).length; if (tp > 1) tp = 1; }
+    else if (c.kind === 'storage') { tp = Math.min(1, edges.filter(x => x.to === c.id).length); }
     const bt = beltFor(e.rate, isLiq(e.item));
     edges.push({ id: uid(), from: a.id, fp, to: c.id, tp, tier: bt.tier, lanes: bt.n });
   });
-  p.build = { nodes, edges }; BSEL = null; save(); renderBuild(); setTimeout(fitBuild, 30);
-  toast(`Construcción generada: ${nodes.length} bloques y ${edges.length} conexiones.`);
+  const b = { nodes, edges };
+  if (!grouped) nodes.slice().forEach(n => { if ((n.kind === 'machine' || n.kind === 'extractor') && n.count > 1) expandGroup(b, n); });
+  p.build = b; BSEL = null; save(); renderBuild(); setTimeout(fitBuild, 30);
+  const mc = b.nodes.filter(n => n.kind === 'machine' || n.kind === 'extractor').length;
+  toast(`Construcción generada: ${mc} máquinas, ${b.nodes.length - mc} divisores, fusionadores y almacenes.`);
+}
+function splitSelected() {
+  const b = plan().build; const n = b.nodes.find(x => x.id === BSEL?.node); if (!n) return;
+  const d = groupDims(n); const old = bGeom(n).h; const x0 = n.x - d.leftW, x1 = n.x + bGeom(n).w + d.rightW;
+  const others = b.nodes.filter(x => x.id !== n.id);
+  const res = expandGroup(b, n); if (!res) return;
+  const extra = res.height - old;
+  others.forEach(o => { const w = bGeom(o).w; if (o.y > n.y && o.x < x1 && o.x + w > x0) o.y += extra + 20; });
+  BSEL = { node: res.copies[0].id }; save(); renderBuild(); toast(`Separado en ${res.copies.length} máquinas.`);
 }
 
 /* =================== RECETAS =================== */
@@ -1730,6 +1810,7 @@ function bind() {
     if (!b.dataset.confirm) { b.dataset.confirm = 1; b.textContent = '¿Vaciar todo?'; setTimeout(() => { b.dataset.confirm = ''; b.textContent = 'Vaciar'; }, 3000); return; }
     plan().build = { nodes: [], edges: [] }; b.dataset.confirm = ''; b.textContent = 'Vaciar'; BSEL = null; save(); renderBuild();
   });
+  $('#bGroup').checked = !!S.groupBuild; $('#bGroup').addEventListener('change', e => { S.groupBuild = e.target.checked; save(); });
   $('#bBelt').value = S.defBelt || 3; $('#bBelt').addEventListener('change', e => { S.defBelt = +e.target.value; save(); });
   $('#binsp').addEventListener('change', e => {
     const b = plan().build; const t = e.target;
@@ -1748,6 +1829,7 @@ function bind() {
     save(); renderBuild();
   });
   $('#binsp').addEventListener('click', e => {
+    if (e.target.closest('[data-bsplit]')) { splitSelected(); return; }
     if (e.target.closest('[data-bdel]')) deleteBSel();
     if (e.target.closest('[data-bdup]')) { const b = plan().build; const n = b.nodes.find(x => x.id === BSEL.node); const c = Object.assign({}, n, { id: uid(), x: n.x + 30, y: n.y + 30 }); b.nodes.push(c); BSEL = { node: c.id }; save(); renderBuild(); }
     if (e.target.closest('#bs-pick')) { const n = plan().build.nodes.find(x => x.id === BSEL.node); pickItem(i => { n.item = i; pruneEdges(n); save(); renderBuild(); }); }

@@ -260,24 +260,22 @@ function waterFill(total, caps) {
 }
 /* Propaga qué objeto lleva cada cinta (para divisores/fusionadores) */
 function edgeItems(build) {
-  const nodes = Object.fromEntries(build.nodes.map(n => [n.id, n]));
-  const item = {};
-  const portItem = (n, side, k) => { const p = nodePorts(n)[side][k]; return p ? p.item : null; };
-  for (let pass = 0; pass < 30; pass++) {
-    let ch = false;
-    for (const e of build.edges) {
-      if (item[e.id]) continue;
-      const a = nodes[e.from], b = nodes[e.to]; if (!a || !b) continue;
-      let it = portItem(a, 'outs', e.fp) || portItem(b, 'ins', e.tp);
-      if (!it && (a.kind === 'splitter' || a.kind === 'merger')) {
-        const inc = build.edges.find(x => x.to === a.id && item[x.id]); if (inc) it = item[inc.id];
-      }
-      if (!it && (b.kind === 'splitter' || b.kind === 'merger')) {
-        const og = build.edges.find(x => x.from === b.id && item[x.id]); if (og) it = item[og.id];
-      }
-      if (it) { item[e.id] = it; ch = true; }
+  const nodes = {}; build.nodes.forEach(n => nodes[n.id] = n);
+  const item = {}, inE = {}, outE = {};
+  for (const e of build.edges) { (outE[e.from] ??= []).push(e); (inE[e.to] ??= []).push(e); }
+  const isLog = n => n && (n.kind === 'splitter' || n.kind === 'merger');
+  const q = [];
+  for (const e of build.edges) {
+    const a = nodes[e.from], b = nodes[e.to]; if (!a || !b) continue;
+    const it = nodePorts(a).outs[e.fp]?.item || nodePorts(b).ins[e.tp]?.item;
+    if (it) { item[e.id] = it; q.push(e); }
+  }
+  while (q.length) { // propagar a través de divisores y fusionadores
+    const e = q.pop(), it = item[e.id];
+    for (const nid of [e.from, e.to]) {
+      if (!isLog(nodes[nid])) continue;
+      for (const x of [...(inE[nid] || []), ...(outE[nid] || [])]) if (!item[x.id]) { item[x.id] = it; q.push(x); }
     }
-    if (!ch) break;
   }
   return item;
 }
@@ -299,8 +297,9 @@ function simulate(build) {
   const st = {};
   const portEdges = (list, key, k) => list.filter(e => e[key] === k);
   const order = topoOrder(nodes, edges);
-  for (let it = 0; it < 120; it++) {
-    let delta = 0;
+  let iters = 0, lastDelta = 0;
+  for (let it = 0; it < 600; it++) {
+    let delta = 0; iters = it;
     // pase hacia adelante
     for (const n of order) {
       const outs = outE[n.id], ins = inE[n.id];
@@ -341,12 +340,10 @@ function simulate(build) {
     for (let k2 = order.length - 1; k2 >= 0; k2--) {
       const n = order[k2]; const ins = inE[n.id], outs = outE[n.id];
       const setDemand = (list, total) => {
-        const caps = list.map(e => cap[e.id]);
-        // repartir según lo ofrecido primero, luego lo que sobre
-        const a = waterFill(total, list.map(e => Math.min(cap[e.id], Math.max(offer[e.id], 1e-9))));
-        let left = total - a.reduce((s, v) => s + v, 0);
-        const extra = waterFill(left, caps.map((c, k) => c - a[k]));
-        list.forEach((e, k) => { const v = a[k] + extra[k]; delta = Math.max(delta, Math.abs(demand[e.id] - v)); demand[e.id] = v; });
+        // primero lo que ya ofrece cada entrada; lo que sobra lo puede aportar cualquiera
+        const a = waterFill(total, list.map(e => Math.min(cap[e.id], offer[e.id])));
+        const left = total - a.reduce((s, v) => s + v, 0);
+        list.forEach((e, k) => { const v = Math.min(cap[e.id], a[k] + left); delta = Math.max(delta, Math.abs(demand[e.id] - v)); demand[e.id] = v; });
       };
       if (n.kind === 'storage' || n.kind === 'sink') ins.forEach(e => { delta = Math.max(delta, Math.abs(demand[e.id] - cap[e.id])); demand[e.id] = cap[e.id]; });
       else if (n.kind === 'splitter' || n.kind === 'merger') setDemand(ins, outs.reduce((s, e) => s + Math.min(cap[e.id], demand[e.id]), 0));
@@ -361,6 +358,7 @@ function simulate(build) {
         r.in.forEach(([i, a], k) => setDemand(portEdges(ins, 'tp', k), Math.max(0, mx) * a));
       }
     }
+    lastDelta = delta;
     if (delta < 1e-9) break;
   }
   // resultados
@@ -399,7 +397,7 @@ function simulate(build) {
       if (starved || blocked) issues.push({ edge: e.id, t: 'belt' });
     }
   }
-  return { st, flow, cap, eItem, received, consumedSrc, power, powerMax, machines, points, issues };
+  return { st, flow, cap, eItem, received, consumedSrc, power, powerMax, machines, points, issues, iters, lastDelta };
 }
 function topoOrder(nodes, edges) {
   const indeg = {}; const adj = {};
